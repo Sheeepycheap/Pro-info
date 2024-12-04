@@ -13,8 +13,7 @@ def ydataframe(stock : str, start : str , interval : str ) -> pd.DataFrame :
     # pas dépasser 60 jours par exemple). Pour du backtest, il faut importer la data manuellement, mais 
     # pour du live trading, cela suffit. 
     # ""
-
-    df = yf.download(stock,start = start, interval=interval )
+    df = yf.download(tickers = stock,start = start, interval=interval )
     df.dropna(inplace=True)
     return df
 
@@ -60,7 +59,7 @@ def zscore(data, length : int, column : str) -> pd.DataFrame:
     sma(data,length, column)
     displacement = data[column] - data[str(length) + "SMA_" + column]
     std(data, length, column)
-    data[str(length) + "Zscore_" + column] = displacement.divide(data[str(length) + "STD_" + column])
+    data[str(length) + "Zscore_" + column] = displacement / data[str(length) + "STD_" + column]     
     return data
 
 def quantile(data, length : int, column : str, q : int) -> pd.DataFrame:
@@ -76,7 +75,6 @@ def variation(data, variationrange : int, column : str) -> pd.DataFrame:
     #""
     intermediarydataframe = data[column].iloc[variationrange:].reset_index(drop = True)
     return (data[column] - intermediarydataframe).abs()
-
 
 def smoothaveragerange(data, column : str, fastperiod : float, fastrange : float) -> pd.DataFrame:
         wper = fastperiod*2 - 1
@@ -108,6 +106,72 @@ def money_to_volume(market: str, money : float) -> float :
     #""
     prix_1market = mt5.symbol_info_tick(market).ask
     return round(money/prix_1market,2)
+
+
+def PSAR(df, af=0.02, max=0.2):
+    #""
+    #rajoute la colonne des sar d'une colonne. L'ema se calcul sur length unités. Renvoie une dataframe.
+    #Pour cela on va avoir besoin de la colonner des AF (acceleration factor) qui sont des valeurs permettant de juger l'évolution
+    #de latendance AF0 = 0.02 et si on fait un nouveau plus haut (resp plus bas) alors AF += 0.02 et max(AF) = 0.2
+    #EP = extreme point, le plus haut (resp plus bas) de la tendance actuelle
+    #On calcul le SAR à temps N avec la formule de récurence suivante: 
+    #SARn = SAR(n-1) + AF(n-1)*(EP(n-1) - SAR(n-1)) sachant que SAR(0) = 1 er high (resp low) de la tendance haussière (resp baissière)
+    #""
+    df.loc[0, 'AF'] = 0.02
+    df.loc[0, 'PSAR'] = df.loc[0, 'low']
+    df.loc[0, 'EP'] = df.loc[0, 'high']
+    df.loc[0, 'PSARdir'] = "bull"
+    for a in range(1, len(df)):
+        if df.loc[a-1, 'PSARdir'] == 'bull':
+            df.loc[a, 'PSAR'] = df.loc[a-1, 'PSAR'] + df.loc[a-1,'AF']*(df.loc[a-1, 'EP']-df.loc[a-1, 'PSAR'])
+            if df.loc[a, 'high'] > df.loc[a-1, 'EP']:
+                df.loc[a,'EP'] = df.loc[a, 'high']
+                if df.loc[a-1, 'AF'] <0.2:
+                    df.loc[a, 'AF'] = df.loc[a-1, 'AF'] + af
+                else:
+                    df.loc[a, 'AF'] = df.loc[a-1, 'AF']
+            else:
+                df.loc[a,'EP'] = df.loc[a-1, 'EP']
+                df.loc[a, 'AF'] = df.loc[a-1, 'AF']
+
+            if df.loc[a-1, 'PSAR'] > df.loc[a,'low'] : 
+                df.loc[a, 'PSARdir'] = 'bear'
+                df.loc[a,'EP'] = df.loc[a, 'low']
+                df.loc[a, 'AF'] = af
+                if df.loc[a, 'high'] > df.loc[a-1, 'EP']:
+                    df.loc[a, 'PSAR'] = df.loc[a, 'high']
+                else:
+                    df.loc[a, 'PSAR'] = df.loc[a-1,'EP']
+            else:
+                df.loc[a, 'PSARdir'] = 'bull'
+        if df.loc[a-1, 'PSARdir'] == 'bear':
+            df.loc[a, 'PSAR'] = df.loc[a-1, 'PSAR'] - df.loc[a-1,'AF']*(df.loc[a-1, 'PSAR'] - df.loc[a-1, 'EP'])
+            if df.loc[a, 'low'] < df.loc[a-1, 'EP']:
+                df.loc[a,'EP'] = df.loc[a, 'low']
+                if df.loc[a-1, 'AF'] <0.2:
+                    df.loc[a, 'AF'] = df.loc[a-1, 'AF'] + af
+                else:
+                    df.loc[a, 'AF'] = df.loc[a-1, 'AF']
+            else:
+                df.loc[a,'EP'] = df.loc[a-1, 'EP']
+                df.loc[a, 'AF'] = df.loc[a-1, 'AF']
+            if df.loc[a-1, 'PSAR'] < df.loc[a,'high'] : 
+                df.loc[a, 'PSARdir'] = 'bull'
+                df.loc[a,'EP'] = df.loc[a, 'high']
+                df.loc[a, 'AF'] = af
+                if df.loc[a, 'low'] < df.loc[a-1, 'EP']:
+                    df.loc[a,'PSAR'] = df.loc[a, 'low']
+                else:
+                    df.loc[a, 'PSAR'] = df.loc[a-1,'EP']
+            else:
+                df.loc[a, 'PSARdir'] = 'bear'
+
+
+def KijunLine(data : pd.DataFrame, colum : str ):
+    data['kijun'] = (1/2) * ( data['high'].rolling(window = 26).max() + data['low'].rolling(window= 26).min())
+
+def KijunLine(data : pd.DataFrame, colum : str ):
+    data['tenkan'] = (1/2) * ( data['high'].rolling(window = 9).max() + data['low'].rolling(window= 9).min())
 
 def reco_morningstar(data)-> pd.DataFrame: 
     #""
@@ -142,10 +206,6 @@ def MACD(df) -> pd.DataFrame :
     #""
     df['MACD'],df['Signal'],df['Hist'] = talib.MACD(df['Close'], fastperiod=12, slowperiod=26, signalperiod=9)
     return df 
-
-
-
-
 
 
 
